@@ -5,6 +5,7 @@ authors = ["Simão Mata <sm@0io.eu>"]
 edition = "2018"
 
 [dependencies]
-xml-rs = "0.8.0"
+# xml-rs = "0.8.0"
 gpx = "0.6.0"
 geo-types = "0.2.2"
+quick-xml = "0.12.0"
