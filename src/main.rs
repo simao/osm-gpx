@@ -15,6 +15,8 @@ use geo_types::Point;
 use osmpbfreader::{OsmId, OsmObj};
 use std::collections::BTreeMap;
 
+// TODO: Cli arguments
+// TODO: Use centroid of way/relation to get center
 
 fn write_gpx_data(data: Gpx) -> std::io::Result<()> {
     let buffer = File::create("foo.xml")?;
@@ -31,7 +33,7 @@ fn extract_name(obj: &osmpbfreader::OsmObj) -> Option<String> {
 }
 
 fn extract_gpx_waypoint(name: Option<String>, node: &osmpbfreader::objects::Node) -> Waypoint {
-    let point = Point::new(node.lat(), node.lon());
+    let point = Point::new(node.lon(), node.lat());
     let mut wpt = Waypoint::new(point);
     wpt.name = name;
     info!("Found campsite named {:?} at {:?}", wpt.name, point);
