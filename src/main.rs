@@ -12,6 +12,10 @@ use gpx::GpxVersion;
 use gpx::Waypoint;
 use geo_types::Point;
 
+use osmpbfreader::{OsmId, OsmObj};
+use std::collections::BTreeMap;
+
+
 fn write_gpx_data(data: Gpx) -> std::io::Result<()> {
     let buffer = File::create("foo.xml")?;
     write(&data, buffer).unwrap();
@@ -26,21 +30,62 @@ fn extract_name(obj: &osmpbfreader::OsmObj) -> Option<String> {
     obj.tags().get("name").map(|c| c.to_owned() )
 }
 
-// TODO: Should recurse and get dependent object by id if not a node
-fn extract_gpx_waypoint(name: Option<String>, obj: &osmpbfreader::OsmObj) -> Option<Waypoint> {
+fn extract_gpx_waypoint(name: Option<String>, node: &osmpbfreader::objects::Node) -> Waypoint {
+    let point = Point::new(node.lat(), node.lon());
+    let mut wpt = Waypoint::new(point);
+    wpt.name = name;
+    info!("Found campsite named {:?} at {:?}", wpt.name, point);
+    wpt
+}
+
+fn extract_osm_obj_dep_ids(obj: &OsmObj) -> Vec<OsmId> {
     match obj {
-        osmpbfreader::OsmObj::Node(ref node) => {
-            let point = Point::new(node.lat(), node.lon());
-            let mut wpt = Waypoint::new(point);
-            wpt.name = name;
-            info!("Found campsite named {:?} at {:?}", wpt.name, point);
-            Some(wpt)
+        OsmObj::Node(ref _node) =>
+            vec![obj.id()],
+        OsmObj::Way(ref way) =>
+            way.nodes.iter().map(|n| OsmId::Node(*n)).collect(),
+        OsmObj::Relation(ref relation) =>
+            relation.refs.iter().map(|m| m.member).collect(),
+    }
+}
+
+fn extract_gpx_waypoint_recur(objs: &BTreeMap<OsmId, OsmObj>, start_at: &OsmObj) -> Option<Waypoint> {
+    let name = extract_name(start_at);
+    let mut deps = extract_osm_obj_dep_ids(start_at);
+    let mut result = None;
+
+    while result.is_none() && deps.len() > 0 {
+        let obj = deps.pop().unwrap();
+
+        if deps.len() > 1000 {
+            panic!("Something went wrong, too many dependencies to search for. Started with {:?}", start_at);
         }
-        _ => {
-            error!("obj is not a node, cannot extract waypoint: {:?}", obj);
-            None
+
+        match obj {
+            osmpbfreader::OsmId::Node(ref id) => {
+                let node = objs.get(&OsmId::Node(*id)).unwrap();
+
+                if let OsmObj::Node(n) = node {
+                    result = Some(extract_gpx_waypoint(name, n));
+                    break;
+                }
+            }
+            osmpbfreader::OsmId::Way(ref id) => {
+                let way = objs.get(&OsmId::Way(*id)).unwrap();
+                let mut nodes = extract_osm_obj_dep_ids(way);
+                debug!("Dependency is type way, recursing, adding {} nodes to deps to search", nodes.len());
+                deps.append(&mut nodes);
+            }
+            osmpbfreader::OsmId::Relation(ref id) => {
+                debug!("Dependency is type relation, recursing");
+                let relation = objs.get(&OsmId::Relation(*id)).unwrap();
+                let mut relations = extract_osm_obj_dep_ids(relation);
+                deps.append(&mut relations);
+            }
         }
     }
+
+    result
 }
 
 fn main() {
@@ -49,7 +94,6 @@ fn main() {
     let filename = "sachsen-latest.osm.pbf";
     let r = std::fs::File::open(&std::path::Path::new(filename)).unwrap();
     let mut pbf = osmpbfreader::OsmPbfReader::new(r);
-    let mut counter = 0;
 
     let mut data : Gpx = Default::default();
     data.version = GpxVersion::Gpx11;
@@ -57,44 +101,21 @@ fn main() {
 
     let objs = pbf.get_objs_and_deps(is_campsite).unwrap();
 
-    for obj in objs.values() {
-        match obj {
-            osmpbfreader::OsmObj::Node(_) if is_campsite(obj) => {
-                let name = extract_name(&obj);
-                let wpt = extract_gpx_waypoint(name, &obj).unwrap();
-                data.waypoints.push(wpt);
-                counter += 1;
-            }
-            osmpbfreader::OsmObj::Way(ref way) if is_campsite(obj) => {
-                let name = extract_name(&obj);
-                let first = way.nodes.first().unwrap();
-                let node = objs.get(&osmpbfreader::OsmId::Node(*first)).unwrap();
-
-                if let Some(wpt) = extract_gpx_waypoint(name, node) {
+    for o in objs.values() {
+        match o {
+            obj if is_campsite(&o) => {   
+                if let Some(wpt) = extract_gpx_waypoint_recur(&objs, &obj) {
                     data.waypoints.push(wpt);
-                    counter += 1;
+                } else {
+                    warn!("Could not recurse to get dependencies for {:?}", obj);
                 }
             }
-            osmpbfreader::OsmObj::Relation(ref relation) if is_campsite(obj) => {
-                let name = extract_name(&obj);
-                let first = relation.refs.first().unwrap().member;
-                let node = objs.get(&first).unwrap();
-
-                for r in &relation.refs {
-                    warn!("relation ref {:?}", r)
-                }
-
-                if let Some(wpt) = extract_gpx_waypoint(name, node) {
-                    data.waypoints.push(wpt);
-                    counter += 1;
-                }
-            }
-            o =>
-                debug!("unmatched obj: {:?}", o)
+            obj =>
+                debug!("unmatched obj: {:?}", obj)
         }
     }
 
-    info!("finished, found {} matching waypoints, but somehow only have {} waypoints on gpx ", counter, data.waypoints.len());
+    info!("finished, found {} matching waypoints ", data.waypoints.len());
 
     write_gpx_data(data).unwrap();
 }
