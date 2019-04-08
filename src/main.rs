@@ -15,9 +15,11 @@ use geo_types::Point;
 use osmpbfreader::{OsmId, OsmObj};
 use std::collections::BTreeMap;
 
+use geo::MultiPoint;
+use geo::algorithm::centroid::Centroid;
+
 // TODO: Cli arguments
 // TODO: Proper Error management
-// TODO: Use centroid of way/relation to get center
 
 fn write_gpx_data(data: Gpx) -> std::io::Result<()> {
     let buffer = File::create("foo.xml")?;
@@ -35,10 +37,20 @@ fn extract_name(obj: &osmpbfreader::OsmObj) -> Option<String> {
 
 fn build_waypoint_from_node(name: Option<String>, node: &osmpbfreader::objects::Node) -> Waypoint {
     let point = Point::new(node.lon(), node.lat());
-    let mut wpt = Waypoint::new(point);
+    build_waypoint_from_point(name, &point)
+}
+
+fn build_waypoint_from_point(name: Option<String>, point: &Point<f64>) -> Waypoint {
+    let mut wpt = Waypoint::new(*point);
     wpt.name = name;
     info!("Found campsite named {:?} at {:?}", wpt.name, point);
     wpt
+}
+
+fn calculate_centroid(nodes: &Vec<&osmpbfreader::objects::Node>) -> Option<Point<f64>> {
+    let points: Vec<Point<f64>> = nodes.iter().map(|n| Point::new(n.lon(), n.lat())).collect();
+    let multi_point: MultiPoint<_> = points.into();
+    multi_point.centroid()
 }
 
 fn extract_osm_obj_deps(obj: &OsmObj) -> Vec<OsmId> {
@@ -65,21 +77,26 @@ fn extract_gpx_waypoint_recur(objs: &BTreeMap<OsmId, OsmObj>, start_at: &OsmObj)
         }
 
         match obj {
-            osmpbfreader::OsmId::Node(ref id) => {
-                let node = objs.get(&OsmId::Node(*id)).unwrap();
+            OsmId::Node(ref id) => {
+                let node = objs.get(&OsmId::Node(*id)).and_then(|n| n.node());
 
-                if let OsmObj::Node(n) = node {
+                if let Some(n) = node {
                     result = Some(build_waypoint_from_node(name, n));
                     break;
                 }
             }
-            osmpbfreader::OsmId::Way(ref id) => {
+            OsmId::Way(ref id) => {
                 let way = objs.get(&OsmId::Way(*id)).unwrap();
-                let mut nodes = extract_osm_obj_deps(way);
-                debug!("Dependency is type way, recursing, adding {} nodes to deps to search", nodes.len());
-                deps.append(&mut nodes);
+                let mut node_ids = extract_osm_obj_deps(way);
+                let nodes = node_ids.iter().flat_map(|n| objs.get(&n).and_then(|nn| nn.node())).collect();
+
+                if let Some(centroid) = calculate_centroid(&nodes) {
+                    result = Some(build_waypoint_from_point(name.clone(), &centroid));
+                } else {
+                    deps.append(&mut node_ids);
+                }
             }
-            osmpbfreader::OsmId::Relation(ref id) => {
+            OsmId::Relation(ref id) => {
                 debug!("Dependency is type relation, recursing");
                 let relation = objs.get(&OsmId::Relation(*id)).unwrap();
                 let mut relations = extract_osm_obj_deps(relation);
@@ -106,7 +123,7 @@ fn main() {
 
     for o in objs.values() {
         match o {
-            obj if is_campsite(&o) => {   
+            obj if is_campsite(&o) => {
                 if let Some(wpt) = extract_gpx_waypoint_recur(&objs, &obj) {
                     data.waypoints.push(wpt);
                 } else {
