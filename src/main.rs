@@ -16,6 +16,7 @@ use osmpbfreader::{OsmId, OsmObj};
 use std::collections::BTreeMap;
 
 // TODO: Cli arguments
+// TODO: Proper Error management
 // TODO: Use centroid of way/relation to get center
 
 fn write_gpx_data(data: Gpx) -> std::io::Result<()> {
@@ -32,7 +33,7 @@ fn extract_name(obj: &osmpbfreader::OsmObj) -> Option<String> {
     obj.tags().get("name").map(|c| c.to_owned() )
 }
 
-fn extract_gpx_waypoint(name: Option<String>, node: &osmpbfreader::objects::Node) -> Waypoint {
+fn build_waypoint_from_node(name: Option<String>, node: &osmpbfreader::objects::Node) -> Waypoint {
     let point = Point::new(node.lon(), node.lat());
     let mut wpt = Waypoint::new(point);
     wpt.name = name;
@@ -40,7 +41,7 @@ fn extract_gpx_waypoint(name: Option<String>, node: &osmpbfreader::objects::Node
     wpt
 }
 
-fn extract_osm_obj_dep_ids(obj: &OsmObj) -> Vec<OsmId> {
+fn extract_osm_obj_deps(obj: &OsmObj) -> Vec<OsmId> {
     match obj {
         OsmObj::Node(ref _node) =>
             vec![obj.id()],
@@ -53,7 +54,7 @@ fn extract_osm_obj_dep_ids(obj: &OsmObj) -> Vec<OsmId> {
 
 fn extract_gpx_waypoint_recur(objs: &BTreeMap<OsmId, OsmObj>, start_at: &OsmObj) -> Option<Waypoint> {
     let name = extract_name(start_at);
-    let mut deps = extract_osm_obj_dep_ids(start_at);
+    let mut deps = extract_osm_obj_deps(start_at);
     let mut result = None;
 
     while result.is_none() && deps.len() > 0 {
@@ -68,20 +69,20 @@ fn extract_gpx_waypoint_recur(objs: &BTreeMap<OsmId, OsmObj>, start_at: &OsmObj)
                 let node = objs.get(&OsmId::Node(*id)).unwrap();
 
                 if let OsmObj::Node(n) = node {
-                    result = Some(extract_gpx_waypoint(name, n));
+                    result = Some(build_waypoint_from_node(name, n));
                     break;
                 }
             }
             osmpbfreader::OsmId::Way(ref id) => {
                 let way = objs.get(&OsmId::Way(*id)).unwrap();
-                let mut nodes = extract_osm_obj_dep_ids(way);
+                let mut nodes = extract_osm_obj_deps(way);
                 debug!("Dependency is type way, recursing, adding {} nodes to deps to search", nodes.len());
                 deps.append(&mut nodes);
             }
             osmpbfreader::OsmId::Relation(ref id) => {
                 debug!("Dependency is type relation, recursing");
                 let relation = objs.get(&OsmId::Relation(*id)).unwrap();
-                let mut relations = extract_osm_obj_dep_ids(relation);
+                let mut relations = extract_osm_obj_deps(relation);
                 deps.append(&mut relations);
             }
         }
