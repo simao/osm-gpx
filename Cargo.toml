@@ -6,8 +6,11 @@ edition = "2018"
 
 [dependencies]
 gpx = "0.6.0"
-geo-types = "0.2.2"
+geo-types = "0.4"
 quick-xml = "0.12.0"
 osmpbfreader = "0.13.0"
 log = "0.4.6"
 pretty_env_logger = "0.3.0"
+
+[patch.crates-io]
+gpx = { path = "/home/simao/code/gpx" }
