@@ -57,8 +57,9 @@ fn extract_osm_obj_deps(obj: &OsmObj) -> Vec<OsmId> {
     match obj {
         OsmObj::Node(ref _node) =>
             vec![obj.id()],
-        OsmObj::Way(ref way) =>
-            way.nodes.iter().map(|n| OsmId::Node(*n)).collect(),
+        OsmObj::Way(ref way) => {
+            way.nodes.iter().map(|n| OsmId::from(*n) ).collect()
+        }
         OsmObj::Relation(ref relation) =>
             relation.refs.iter().map(|m| m.member).collect(),
     }
@@ -78,7 +79,7 @@ fn extract_gpx_waypoint_recur(objs: &BTreeMap<OsmId, OsmObj>, start_at: &OsmObj)
 
         match obj {
             OsmId::Node(ref id) => {
-                let node = objs.get(&OsmId::Node(*id)).and_then(|n| n.node());
+                let node = objs.get(&OsmId::from(*id)).and_then(|n| n.node());
 
                 if let Some(n) = node {
                     result = Some(build_waypoint_from_node(name, n));
