@@ -12,6 +12,7 @@ quick-xml = "0.12.0"
 osmpbfreader = "0.13.0"
 log = "0.4.6"
 pretty_env_logger = "0.3.0"
+clap = "2.33.0"
 
 [patch.crates-io]
 gpx = { path = "/home/simao/code/gpx" }

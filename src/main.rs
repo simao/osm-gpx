@@ -1,8 +1,10 @@
 extern crate osmpbfreader;
+extern crate clap;
 extern crate geo_types;
 extern crate gpx;
 #[macro_use] extern crate log;
 extern crate pretty_env_logger;
+use clap::{Arg, App, SubCommand};
 
 use std::fs::File;
 
@@ -15,20 +17,16 @@ use geo_types::Point;
 use osmpbfreader::{OsmId, OsmObj};
 use std::collections::BTreeMap;
 
+use std::path::Path;
 use geo::MultiPoint;
 use geo::algorithm::centroid::Centroid;
 
-// TODO: Cli arguments
 // TODO: Proper Error management
 
-fn write_gpx_data(data: Gpx) -> std::io::Result<()> {
-    let buffer = File::create("foo.xml")?;
+fn write_gpx_data(output: &Path, data: Gpx) -> std::io::Result<()> {
+    let buffer = File::create(output)?;
     write(&data, buffer).unwrap();
     Ok(())
-}
-
-fn is_campsite(obj: &osmpbfreader::OsmObj) -> bool {
-    obj.tags().contains("tourism", "camp_site")
 }
 
 fn extract_name(obj: &osmpbfreader::OsmObj) -> Option<String> {
@@ -109,22 +107,77 @@ fn extract_gpx_waypoint_recur(objs: &BTreeMap<OsmId, OsmObj>, start_at: &OsmObj)
     result
 }
 
+struct NodeExpression {
+    tag_name: String,
+    tag_value: String
+}
+
+impl NodeExpression {
+    fn build(expression: String) -> Result<NodeExpression, String> {
+        let exp = expression.split("=").collect::<Vec<_>>();
+
+        match &exp[..] {
+            [name, value] =>
+                Ok(NodeExpression { tag_name: name.to_string(), tag_value: value.to_string() }),
+            _ =>
+                Err(format!("Could not compile expression from {}", expression))
+        }
+    }
+
+    fn matcher<'a>(&'a self) -> (impl FnMut(&OsmObj) -> bool + 'a) {
+        move |obj: &OsmObj| { self.matches(obj) }
+    }
+
+    fn matches(&self, obj: &OsmObj) -> bool {
+        obj.tags().contains(&self.tag_name, &self.tag_value)
+    }
+}
+
 fn main() {
     pretty_env_logger::init();
 
-    let filename = "sachsen-latest.osm.pbf";
-    let r = std::fs::File::open(&std::path::Path::new(filename)).unwrap();
+    let matches = App::new("osm-gpx")
+        .version("1.0")
+        .author("Simão Mata <sm@0io.eu>")
+        .about("extracts gpx waypoints for osm nodes matching given tags")
+        .arg(Arg::with_name("osm-file")
+             .short("i")
+             .long("osm-file")
+             .required(true)
+             .value_name("FILE")
+             .help("Sets path for osm FILE"))
+        .arg(Arg::with_name("output")
+             .short("o")
+             .long("output")
+             .required(true)
+             .value_name("OUTPUT")
+             .help("Sets path for output GPX file"))
+        .arg(Arg::with_name("expression")
+             .short("e")
+             .long("exp")
+             .required(true)
+             .value_name("EXPRESSION")
+             .help("Sets expression to search for in the form tag-name=tag-contains"))
+        .get_matches();
+
+    let filename = matches.value_of("osm-file").unwrap();
+    let output = Path::new(matches.value_of("output").unwrap());
+    let r = std::fs::File::open(&Path::new(filename)).unwrap();
     let mut pbf = osmpbfreader::OsmPbfReader::new(r);
 
     let mut data : Gpx = Default::default();
     data.version = GpxVersion::Gpx11;
     data.waypoints = vec![];
 
-    let objs = pbf.get_objs_and_deps(is_campsite).unwrap();
+    let exp = matches.value_of("expression").unwrap();
+    let node_expression = NodeExpression::build(exp.into()).unwrap();
+    let node_matcher = |obj: &OsmObj| { node_expression.matches(obj) };
+
+    let objs = pbf.get_objs_and_deps(node_matcher).expect(&format!("Could not open file {}, is the file in osm pbf format?", &filename));
 
     for o in objs.values() {
         match o {
-            obj if is_campsite(&o) => {
+            obj if node_matcher(&o) => {
                 if let Some(wpt) = extract_gpx_waypoint_recur(&objs, &obj) {
                     data.waypoints.push(wpt);
                 } else {
@@ -138,5 +191,5 @@ fn main() {
 
     info!("finished, found {} matching waypoints ", data.waypoints.len());
 
-    write_gpx_data(data).unwrap();
+    write_gpx_data(output, data).unwrap();
 }
