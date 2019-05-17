@@ -1,10 +1,11 @@
 extern crate osmpbfreader;
+extern crate regex;
 extern crate clap;
 extern crate geo_types;
 extern crate gpx;
 #[macro_use] extern crate log;
 extern crate pretty_env_logger;
-use clap::{Arg, App, SubCommand};
+use clap::{Arg, App};
 
 use std::fs::File;
 
@@ -13,6 +14,7 @@ use gpx::Gpx;
 use gpx::GpxVersion;
 use gpx::Waypoint;
 use geo_types::Point;
+use regex::Regex;
 
 use osmpbfreader::{OsmId, OsmObj};
 use std::collections::BTreeMap;
@@ -107,29 +109,46 @@ fn extract_gpx_waypoint_recur(objs: &BTreeMap<OsmId, OsmObj>, start_at: &OsmObj)
     result
 }
 
+#[derive(Debug)]
+enum Operator {
+    Equals,
+    Includes
+}
+
+#[derive(Debug)]
 struct NodeExpression {
     tag_name: String,
-    tag_value: String
+    tag_value: String,
+    op: Operator
 }
 
 impl NodeExpression {
-    fn build(expression: String) -> Result<NodeExpression, String> {
-        let exp = expression.split("=").collect::<Vec<_>>();
+    fn parse(expression: String) -> Result<NodeExpression, String>    {
+        let re = Regex::new(r"(?P<name>\w+)(?P<op>[=~])(?P<value>\w+)").map_err(|e| e.to_string())?;
+        let err = format!("Could not compile expression from {}", expression);
+        let caps = re.captures(&expression).ok_or(err)?;
 
-        match &exp[..] {
-            [name, value] =>
-                Ok(NodeExpression { tag_name: name.to_string(), tag_value: value.to_string() }),
-            _ =>
-                Err(format!("Could not compile expression from {}", expression))
+        let op = if caps.name("op").unwrap().as_str() == "=" {
+            Operator::Equals
+        } else {
+            Operator::Includes
+        };
+
+        Ok(NodeExpression { tag_name: caps.name("name").unwrap().as_str().into(),
+                            tag_value: caps.name("value").unwrap().as_str().into(),
+                            op: op })
+    }
+
+    fn matcher(&self) -> impl Fn(&OsmObj) -> bool + '_ {
+        move |obj: &OsmObj| {
+
+            match self.op {
+                Operator::Equals =>
+                    obj.tags().contains(&self.tag_name, &self.tag_value),
+                Operator::Includes =>
+                    obj.tags().get(&self.tag_name).map_or(false, |v| v.to_lowercase().contains(&self.tag_value.to_lowercase()))
+            }
         }
-    }
-
-    fn matcher<'a>(&'a self) -> (impl FnMut(&OsmObj) -> bool + 'a) {
-        move |obj: &OsmObj| { self.matches(obj) }
-    }
-
-    fn matches(&self, obj: &OsmObj) -> bool {
-        obj.tags().contains(&self.tag_name, &self.tag_value)
     }
 }
 
@@ -170,10 +189,10 @@ fn main() {
     data.waypoints = vec![];
 
     let exp = matches.value_of("expression").unwrap();
-    let node_expression = NodeExpression::build(exp.into()).unwrap();
-    let node_matcher = |obj: &OsmObj| { node_expression.matches(obj) };
+    let node_expression = NodeExpression::parse(exp.into()).unwrap();
+    let node_matcher = node_expression.matcher();
 
-    let objs = pbf.get_objs_and_deps(node_matcher).expect(&format!("Could not open file {}, is the file in osm pbf format?", &filename));
+    let objs = pbf.get_objs_and_deps(node_expression.matcher()).expect(&format!("Could not open file {}, is the file in osm pbf format?", &filename));
 
     for o in objs.values() {
         match o {
