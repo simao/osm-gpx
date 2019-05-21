@@ -43,7 +43,7 @@ fn build_waypoint_from_node(name: Option<String>, node: &osmpbfreader::objects::
 fn build_waypoint_from_point(name: Option<String>, point: &Point<f64>) -> Waypoint {
     let mut wpt = Waypoint::new(*point);
     wpt.name = name;
-    info!("Found campsite named {:?} at {:?}", wpt.name, point);
+    info!("Found node named {:?} at {:?}", wpt.name, point);
     wpt
 }
 
@@ -141,7 +141,6 @@ impl NodeExpression {
 
     fn matcher(&self) -> impl Fn(&OsmObj) -> bool + '_ {
         move |obj: &OsmObj| {
-
             match self.op {
                 Operator::Equals =>
                     obj.tags().contains(&self.tag_name, &self.tag_value),
