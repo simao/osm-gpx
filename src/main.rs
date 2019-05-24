@@ -1,27 +1,27 @@
-extern crate osmpbfreader;
-extern crate regex;
 extern crate clap;
 extern crate geo_types;
 extern crate gpx;
-#[macro_use] extern crate log;
+extern crate osmpbfreader;
+extern crate regex;
+#[macro_use]
+extern crate log;
 extern crate pretty_env_logger;
-use clap::{Arg, App};
 
-use std::fs::File;
-
+use clap::{App, Arg};
+use geo_types::Point;
 use gpx::write;
 use gpx::Gpx;
 use gpx::GpxVersion;
 use gpx::Waypoint;
-use geo_types::Point;
 use regex::Regex;
+use std::fs::File;
 
 use osmpbfreader::{OsmId, OsmObj};
 use std::collections::BTreeMap;
 
-use std::path::Path;
-use geo::MultiPoint;
 use geo::algorithm::centroid::Centroid;
+use geo::MultiPoint;
+use std::path::Path;
 
 // TODO: Proper Error management
 
@@ -32,7 +32,7 @@ fn write_gpx_data(output: &Path, data: Gpx) -> std::io::Result<()> {
 }
 
 fn extract_name(obj: &osmpbfreader::OsmObj) -> Option<String> {
-    obj.tags().get("name").map(|c| c.to_owned() )
+    obj.tags().get("name").map(|c| c.to_owned())
 }
 
 fn build_waypoint_from_node(name: Option<String>, node: &osmpbfreader::objects::Node) -> Waypoint {
@@ -55,17 +55,16 @@ fn calculate_centroid(nodes: &Vec<&osmpbfreader::objects::Node>) -> Option<Point
 
 fn extract_osm_obj_deps(obj: &OsmObj) -> Vec<OsmId> {
     match obj {
-        OsmObj::Node(ref _node) =>
-            vec![obj.id()],
-        OsmObj::Way(ref way) => {
-            way.nodes.iter().map(|n| OsmId::from(*n) ).collect()
-        }
-        OsmObj::Relation(ref relation) =>
-            relation.refs.iter().map(|m| m.member).collect(),
+        OsmObj::Node(ref _node) => vec![obj.id()],
+        OsmObj::Way(ref way) => way.nodes.iter().map(|n| OsmId::from(*n)).collect(),
+        OsmObj::Relation(ref relation) => relation.refs.iter().map(|m| m.member).collect(),
     }
 }
 
-fn extract_gpx_waypoint_recur(objs: &BTreeMap<OsmId, OsmObj>, start_at: &OsmObj) -> Option<Waypoint> {
+fn extract_gpx_waypoint_recur(
+    objs: &BTreeMap<OsmId, OsmObj>,
+    start_at: &OsmObj,
+) -> Option<Waypoint> {
     let name = extract_name(start_at);
     let mut deps = extract_osm_obj_deps(start_at);
     let mut result = None;
@@ -74,7 +73,10 @@ fn extract_gpx_waypoint_recur(objs: &BTreeMap<OsmId, OsmObj>, start_at: &OsmObj)
         let obj = deps.pop().unwrap();
 
         if deps.len() > 1000 {
-            panic!("Something went wrong, too many dependencies to search for. Started with {:?}", start_at);
+            panic!(
+                "Something went wrong, too many dependencies to search for. Started with {:?}",
+                start_at
+            );
         }
 
         match obj {
@@ -89,7 +91,10 @@ fn extract_gpx_waypoint_recur(objs: &BTreeMap<OsmId, OsmObj>, start_at: &OsmObj)
             OsmId::Way(ref id) => {
                 let way = objs.get(&OsmId::Way(*id)).unwrap();
                 let mut node_ids = extract_osm_obj_deps(way);
-                let nodes = node_ids.iter().flat_map(|n| objs.get(&n).and_then(|nn| nn.node())).collect();
+                let nodes = node_ids
+                    .iter()
+                    .flat_map(|n| objs.get(&n).and_then(|nn| nn.node()))
+                    .collect();
 
                 if let Some(centroid) = calculate_centroid(&nodes) {
                     result = Some(build_waypoint_from_point(name.clone(), &centroid));
@@ -112,19 +117,20 @@ fn extract_gpx_waypoint_recur(objs: &BTreeMap<OsmId, OsmObj>, start_at: &OsmObj)
 #[derive(Debug)]
 enum Operator {
     Equals,
-    Includes
+    Includes,
 }
 
 #[derive(Debug)]
 struct NodeExpression {
     tag_name: String,
     tag_value: String,
-    op: Operator
+    op: Operator,
 }
 
 impl NodeExpression {
-    fn parse(expression: String) -> Result<NodeExpression, String>    {
-        let re = Regex::new(r"(?P<name>\w+)(?P<op>[=~])(?P<value>\w+)").map_err(|e| e.to_string())?;
+    fn parse(expression: String) -> Result<NodeExpression, String> {
+        let re =
+            Regex::new(r"(?P<name>\w+)(?P<op>[=~])(?P<value>\w+)").map_err(|e| e.to_string())?;
         let err = format!("Could not compile expression from {}", expression);
         let caps = re.captures(&expression).ok_or(err)?;
 
@@ -134,19 +140,19 @@ impl NodeExpression {
             Operator::Includes
         };
 
-        Ok(NodeExpression { tag_name: caps.name("name").unwrap().as_str().into(),
-                            tag_value: caps.name("value").unwrap().as_str().into(),
-                            op: op })
+        Ok(NodeExpression {
+            tag_name: caps.name("name").unwrap().as_str().into(),
+            tag_value: caps.name("value").unwrap().as_str().into(),
+            op: op,
+        })
     }
 
     fn matcher(&self) -> impl Fn(&OsmObj) -> bool + '_ {
-        move |obj: &OsmObj| {
-            match self.op {
-                Operator::Equals =>
-                    obj.tags().contains(&self.tag_name, &self.tag_value),
-                Operator::Includes =>
-                    obj.tags().get(&self.tag_name).map_or(false, |v| v.to_lowercase().contains(&self.tag_value.to_lowercase()))
-            }
+        move |obj: &OsmObj| match self.op {
+            Operator::Equals => obj.tags().contains(&self.tag_name, &self.tag_value),
+            Operator::Includes => obj.tags().get(&self.tag_name).map_or(false, |v| {
+                v.to_lowercase().contains(&self.tag_value.to_lowercase())
+            }),
         }
     }
 }
@@ -158,24 +164,30 @@ fn main() {
         .version("1.0")
         .author("Simão Mata <sm@0io.eu>")
         .about("extracts gpx waypoints for osm nodes matching given tags")
-        .arg(Arg::with_name("osm-file")
-             .short("i")
-             .long("osm-file")
-             .required(true)
-             .value_name("FILE")
-             .help("Sets path for osm FILE"))
-        .arg(Arg::with_name("output")
-             .short("o")
-             .long("output")
-             .required(true)
-             .value_name("OUTPUT")
-             .help("Sets path for output GPX file"))
-        .arg(Arg::with_name("expression")
-             .short("e")
-             .long("exp")
-             .required(true)
-             .value_name("EXPRESSION")
-             .help("Sets expression to search for in the form tag-name=tag-contains"))
+        .arg(
+            Arg::with_name("osm-file")
+                .short("i")
+                .long("osm-file")
+                .required(true)
+                .value_name("FILE")
+                .help("Sets path for osm FILE"),
+        )
+        .arg(
+            Arg::with_name("output")
+                .short("o")
+                .long("output")
+                .required(true)
+                .value_name("OUTPUT")
+                .help("Sets path for output GPX file"),
+        )
+        .arg(
+            Arg::with_name("expression")
+                .short("e")
+                .long("exp")
+                .required(true)
+                .value_name("EXPRESSION")
+                .help("Sets expression to search for in the form tag-name=tag-contains"),
+        )
         .get_matches();
 
     let filename = matches.value_of("osm-file").unwrap();
@@ -183,7 +195,7 @@ fn main() {
     let r = std::fs::File::open(&Path::new(filename)).unwrap();
     let mut pbf = osmpbfreader::OsmPbfReader::new(r);
 
-    let mut data : Gpx = Default::default();
+    let mut data: Gpx = Default::default();
     data.version = GpxVersion::Gpx11;
     data.waypoints = vec![];
 
@@ -191,7 +203,12 @@ fn main() {
     let node_expression = NodeExpression::parse(exp.into()).unwrap();
     let node_matcher = node_expression.matcher();
 
-    let objs = pbf.get_objs_and_deps(node_expression.matcher()).expect(&format!("Could not open file {}, is the file in osm pbf format?", &filename));
+    let objs = pbf
+        .get_objs_and_deps(node_expression.matcher())
+        .expect(&format!(
+            "Could not open file {}, is the file in osm pbf format?",
+            &filename
+        ));
 
     for o in objs.values() {
         match o {
@@ -202,12 +219,14 @@ fn main() {
                     warn!("Could not recurse to get dependencies for {:?}", obj);
                 }
             }
-            obj =>
-                debug!("unmatched obj: {:?}", obj)
+            obj => debug!("unmatched obj: {:?}", obj),
         }
     }
 
-    info!("finished, found {} matching waypoints ", data.waypoints.len());
+    info!(
+        "finished, found {} matching waypoints ",
+        data.waypoints.len()
+    );
 
     write_gpx_data(output, data).unwrap();
 }
