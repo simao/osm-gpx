@@ -5,7 +5,7 @@ authors = ["Simão Mata <sm@0io.eu>"]
 edition = "2018"
 
 [dependencies]
-gpx = "0.6.0"
+gpx = "0.7.0"
 geo = "0.12"
 geo-types = "0.4"
 quick-xml = "0.12.0"
@@ -15,5 +15,3 @@ pretty_env_logger = "0.3.0"
 clap = "2.33.0"
 regex = "1"
 
-[patch.crates-io]
-gpx = { path = "/home/simao/code/gpx" }
