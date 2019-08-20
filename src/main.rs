@@ -64,8 +64,9 @@ fn extract_osm_obj_deps(obj: &OsmObj) -> Vec<OsmId> {
 fn extract_gpx_waypoint_recur(
     objs: &BTreeMap<OsmId, OsmObj>,
     start_at: &OsmObj,
+    default_waypoint_name: Option<&str>,
 ) -> Option<Waypoint> {
-    let name = extract_name(start_at);
+    let name = extract_name(start_at).or(default_waypoint_name.map(|s| s.to_owned()));
     let mut deps = extract_osm_obj_deps(start_at);
     let mut result = None;
 
@@ -161,7 +162,7 @@ fn main() {
     pretty_env_logger::init();
 
     let matches = App::new("osm-gpx")
-        .version("1.0")
+        .version("0.1.0")
         .author("Simão Mata <sm@0io.eu>")
         .about("extracts gpx waypoints for osm nodes matching given tags")
         .arg(
@@ -188,6 +189,13 @@ fn main() {
                 .value_name("EXPRESSION")
                 .help("Sets expression to search for in the form tag-name=tag-contains"),
         )
+        .arg(
+            Arg::with_name("name")
+                .short("n")
+                .long("name")
+                .value_name("NAME")
+                .help("Use NAME as the name of the each waypoint in the gpx if a name is not defined in the data"),
+        )        
         .get_matches();
 
     let filename = matches.value_of("osm-file").unwrap();
@@ -202,6 +210,7 @@ fn main() {
     let exp = matches.value_of("expression").unwrap();
     let node_expression = NodeExpression::parse(exp.into()).unwrap();
     let node_matcher = node_expression.matcher();
+    let default_waypoint_name = matches.value_of("name");
 
     let objs = pbf
         .get_objs_and_deps(node_expression.matcher())
@@ -213,7 +222,7 @@ fn main() {
     for o in objs.values() {
         match o {
             obj if node_matcher(&o) => {
-                if let Some(wpt) = extract_gpx_waypoint_recur(&objs, &obj) {
+                if let Some(wpt) = extract_gpx_waypoint_recur(&objs, &obj, default_waypoint_name) {
                     data.waypoints.push(wpt);
                 } else {
                     warn!("Could not recurse to get dependencies for {:?}", obj);
